@@ -51,7 +51,7 @@ export function LiveFeed() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-foreground">{label}</p>
-              {data?.company_name && (
+              {(data?.company_name as string | undefined) && (
                 <p className="text-[10px] text-muted-foreground truncate">
                   {data.country ? `${COUNTRY_FLAGS[data.country as string] ?? ""} ` : ""}
                   {data.company_name as string}
