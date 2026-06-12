@@ -15,21 +15,25 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
-RUN playwright install chromium --with-deps
-
 COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
 
-# ── API target ───────────────────────────────────────────────────────────────
-FROM base AS api
-EXPOSE 8000
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "4", "--loop", "uvloop"]
+# ── Scraper target (needs Playwright, not used by Railway API deploy) ─────────
+FROM base AS scraper
+RUN playwright install chromium --with-deps
+CMD ["celery", "-A", "src.workers.celery_app", "worker", \
+     "--loglevel=info", "--concurrency=2", \
+     "--queues=scrape"]
 
 # ── Worker target ─────────────────────────────────────────────────────────────
 FROM base AS worker
 CMD ["celery", "-A", "src.workers.celery_app", "worker", \
      "--loglevel=info", "--concurrency=4", \
      "--queues=${WORKER_QUEUE:-ingest,pipeline}"]
+
+# ── API target (default: Railway deploys this) ────────────────────────────────
+FROM base AS api
+EXPOSE 8000
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--workers", "4", "--loop", "uvloop"]
