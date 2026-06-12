@@ -1,0 +1,157 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brass-worker-ingest
+  namespace: brass-export
+  labels:
+    app: brass-worker-ingest
+    component: worker
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: brass-worker-ingest
+  template:
+    metadata:
+      labels:
+        app: brass-worker-ingest
+    spec:
+      containers:
+        - name: worker
+          image: brass-export/worker:latest
+          command:
+            - celery
+            - -A
+            - src.workers.celery_app
+            - worker
+            - --loglevel=info
+            - --queues=ingest
+            - --concurrency=8
+            - --hostname=ingest@$(POD_NAME)
+            - --max-tasks-per-child=200
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          envFrom:
+            - configMapRef:
+                name: brass-app-config
+            - secretRef:
+                name: brass-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - src.workers.celery_app
+                - inspect
+                - ping
+                - -d
+                - celery@$(POD_NAME)
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            failureThreshold: 3
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brass-worker-pipeline
+  namespace: brass-export
+  labels:
+    app: brass-worker-pipeline
+    component: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: brass-worker-pipeline
+  template:
+    metadata:
+      labels:
+        app: brass-worker-pipeline
+    spec:
+      containers:
+        - name: worker
+          image: brass-export/worker:latest
+          command:
+            - celery
+            - -A
+            - src.workers.celery_app
+            - worker
+            - --loglevel=info
+            - --queues=pipeline
+            - --concurrency=4
+            - --hostname=pipeline@$(POD_NAME)
+            - --max-tasks-per-child=50
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          envFrom:
+            - configMapRef:
+                name: brass-app-config
+            - secretRef:
+                name: brass-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brass-beat
+  namespace: brass-export
+  labels:
+    app: brass-beat
+    component: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: brass-beat
+  template:
+    metadata:
+      labels:
+        app: brass-beat
+    spec:
+      containers:
+        - name: beat
+          image: brass-export/worker:latest
+          command:
+            - celery
+            - -A
+            - src.workers.celery_app
+            - beat
+            - --loglevel=info
+            - --schedule=/var/run/celerybeat/celerybeat-schedule
+          envFrom:
+            - configMapRef:
+                name: brass-app-config
+            - secretRef:
+                name: brass-secrets
+          volumeMounts:
+            - name: beat-schedule
+              mountPath: /var/run/celerybeat
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: beat-schedule
+          emptyDir: {}

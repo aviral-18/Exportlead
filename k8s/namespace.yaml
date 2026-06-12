@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: brass-export
+  labels:
+    app.kubernetes.io/name: brass-export-intelligence
+    environment: production

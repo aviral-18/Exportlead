@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Invoke-RestMethod http://localhost:8000/health -ErrorAction SilentlyContinue)",
+      "PowerShell(New-Item -ItemType Directory -Force -Path d:\\\\BRASS\\\\src\\\\scoring)",
+      "PowerShell(\"ok\")",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s \"http://localhost:8000/api/v1/analytics/overview\")",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s \"http://localhost:8000/api/v1/dashboard/top-buyers?limit=5\")",
+      "Bash(curl -s \"http://localhost:8000/api/v1/dashboard/untapped?limit=3\")",
+      "PowerShell(taskkill /F /IM python.exe 2>$null)",
+      "PowerShell(exit 0)",
+      "PowerShell(Start-Sleep -Seconds 5; try { $r = Invoke-WebRequest -Uri \"http://localhost:8000/health\" -UseBasicParsing -TimeoutSec 5; $r.Content } catch { \"not ready: $_\" })",
+      "PowerShell(Start-Sleep -Seconds 7; try { \\(Invoke-WebRequest \"http://localhost:8000/health\" -UseBasicParsing -TimeoutSec 5\\).Content } catch { \"not ready: $_\" })",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(echo \"pid=$!\")",
+      "Bash(curl -s http://localhost:3000 -o /dev/null -w \"%{http_code}\")",
+      "Bash(disown)",
+      "Bash(nohup npm run dev)",
+      "Bash(curl -s http://localhost:3000 -o /dev/null -w \"status=%{http_code}\")",
+      "Bash(cat /tmp/next_dev.log | tail -40)",
+      "Read(//tmp/**)"
+    ]
+  }
+}

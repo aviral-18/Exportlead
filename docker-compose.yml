@@ -1,0 +1,271 @@
+version: "3.9"
+
+x-api-env: &api-env
+  DATABASE_URL: postgresql+asyncpg://brass:${POSTGRES_PASSWORD:-brass_secure_pwd}@postgres:5432/brass_export
+  REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
+  CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/1
+  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/2
+  ELASTICSEARCH_URL: http://elasticsearch:9200
+  SECRET_KEY: ${SECRET_KEY:-change_me_in_production_use_openssl_rand_hex_32}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+
+services:
+  # ── Data stores ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-brass_export}
+      POSTGRES_USER: ${POSTGRES_USER:-brass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brass_secure_pwd}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+    ports:
+      - "5432:5432"
+    command: >
+      postgres
+      -c shared_buffers=2GB
+      -c effective_cache_size=6GB
+      -c maintenance_work_mem=512MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=64MB
+      -c work_mem=64MB
+      -c max_worker_processes=8
+      -c max_parallel_workers=8
+      -c log_min_duration_statement=500
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-brass} -d ${POSTGRES_DB:-brass_export}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 1g
+    networks:
+      - brass
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-redis_secret}
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-redis_secret}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - brass
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - cluster.name=brass-cluster
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+    networks:
+      - brass
+
+  # ── Backend API ──────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brass
+
+  # ── Background workers ────────────────────────────────────────────────────────
+  worker-ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+    env_file: .env
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=info --queues=ingest
+      --concurrency=8 --hostname=ingest@%h
+      --max-tasks-per-child=200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+    deploy:
+      replicas: 2
+    networks:
+      - brass
+
+  worker-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+    env_file: .env
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=info --queues=pipeline
+      --concurrency=4 --hostname=pipeline@%h
+      --max-tasks-per-child=50
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+    networks:
+      - brass
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.beat
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+    env_file: .env
+    volumes:
+      - beat_data:/var/run/celerybeat
+      - ./src:/app/src:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - brass
+
+  flower:
+    image: mher/flower:2.0
+    restart: unless-stopped
+    environment:
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/1
+      FLOWER_BASIC_AUTH: ${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-flower_pwd}
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    networks:
+      - brass
+
+  # ── Frontend ─────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - brass
+
+  # ── Reverse proxy ─────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - brass
+
+  # ── Monitoring ────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    networks:
+      - brass
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-grafana_secret}
+      GF_SERVER_ROOT_URL: http://localhost/grafana
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - brass
+
+volumes:
+  postgres_data:
+  redis_data:
+  es_data:
+  beat_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  brass:
+    driver: bridge

@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: brass-api
+  namespace: brass-export
+  labels:
+    app: brass-api
+spec:
+  selector:
+    app: brass-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: brass-frontend
+  namespace: brass-export
+  labels:
+    app: brass-frontend
+spec:
+  selector:
+    app: brass-frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: brass-flower
+  namespace: brass-export
+spec:
+  selector:
+    app: brass-flower
+  ports:
+    - name: http
+      port: 5555
+      targetPort: 5555
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: brass-export
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: brass-export
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: ClusterIP
